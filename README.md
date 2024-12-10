@@ -38,7 +38,7 @@ See the `examples` folder.
 
 This repository is licensed under the MIT license.
 
-## References and Citation
+## References
 
 ```
 [1] https://arxiv.org/pdf/2307.15043
