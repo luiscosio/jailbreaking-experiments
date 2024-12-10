@@ -203,7 +203,7 @@ class ModelRunner:
         
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="Qwen/Qwen2-7B-Instruct")
+    parser.add_argument("--model", type=str, default="meta-llama/llama-3.1-8b-instruct")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--dtype", type=str, default="float16")
     parser.add_argument("--output-dir", type=str, default="results",
