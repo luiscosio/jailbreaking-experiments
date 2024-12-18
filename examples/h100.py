@@ -129,16 +129,14 @@ def main():
     torch.use_deterministic_algorithms(True)
     
     # Load model
-    cache_dir = os.getenv('TRANSFORMERS_CACHE', os.path.expanduser('~/.cache/huggingface'))
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         torch_dtype=getattr(torch, args.dtype),
         device_map="auto",
-        cache_dir=cache_dir
     )
     model = setup_h100_optimizations(model)
     
-    tokenizer = AutoTokenizer.from_pretrained(args.model, cache_dir=cache_dir)
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
     
     config = EnhancedGCGConfig(
         num_steps=args.num_steps,
