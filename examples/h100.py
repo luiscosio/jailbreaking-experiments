@@ -2,11 +2,12 @@ import argparse
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 import torch.cuda.amp as amp
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from nanogcg.gcg import GCGResult  # Updated import
 import nanogcg
 from tqdm import tqdm
 
@@ -93,13 +94,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
 
-def run_optimized_gcg(model, tokenizer, messages, target, config: EnhancedGCGConfig) -> tuple[nanogcg.GCGResult, OptimizationMetrics]:
+def run_optimized_gcg(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    messages: list,
+    target: str,
+    config: EnhancedGCGConfig
+) -> Tuple[GCGResult, OptimizationMetrics]:
     """Run GCG with enhanced monitoring and optimization"""
     start_time = time.time()
     scaler = amp.GradScaler() if config.use_amp else None
     
     metrics = []
     found_adversarial = False
+    result = None
     
     with tqdm(total=config.num_steps, desc="GCG Optimization") as pbar:
         for step in range(config.num_steps):
@@ -137,7 +145,7 @@ def run_optimized_gcg(model, tokenizer, messages, target, config: EnhancedGCGCon
         total_time=end_time - start_time,
         peak_memory=max(m.get('memory_allocated', 0) for m in metrics),
         iterations=len(metrics),
-        best_loss=result.best_loss,
+        best_loss=result.best_loss if result else float('inf'),
         found_adversarial=found_adversarial,
         average_iteration_time=(end_time - start_time) / len(metrics)
     )
