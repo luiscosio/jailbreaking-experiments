@@ -108,9 +108,14 @@ def run_optimized_gcg(
     """Run GCG with enhanced monitoring and optimization"""
     start_time = time.time()
     
-    # Updated GradScaler initialization
-    scaler = amp.GradScaler('cuda') if config.use_amp else None
+    # Initialize batch size if None
+    if config.batch_size is None:
+        config.batch_size = config.search_width
     
+    # Store original batch size for reference
+    original_batch_size = config.batch_size
+    
+    scaler = amp.GradScaler('cuda') if config.use_amp else None
     metrics = []
     found_adversarial = False
     result = None
@@ -119,7 +124,6 @@ def run_optimized_gcg(
         for step in range(config.num_steps):
             step_start = time.time()
             
-            # Updated autocast usage
             with amp.autocast('cuda', enabled=config.use_amp):
                 result = nanogcg.run(model, tokenizer, messages, target, config)
             
@@ -134,12 +138,17 @@ def run_optimized_gcg(
             if current_metrics.get('memory_allocated', 0) > config.max_memory_usage:
                 logger.warning("Memory usage exceeded threshold, reducing batch size")
                 config.batch_size = max(1, config.batch_size // 2)
+                logger.info(f"New batch size: {config.batch_size} (original was {original_batch_size})")
             
             pbar.update(1)
             pbar.set_postfix({
                 'loss': f"{result.best_loss:.4f}",
-                'memory': f"{current_metrics.get('memory_allocated', 0):.2f}GB"
+                'memory': f"{current_metrics.get('memory_allocated', 0):.2f}GB",
+                'batch_size': config.batch_size
             })
+    
+    # Reset batch size to original value
+    config.batch_size = original_batch_size
     
     end_time = time.time()
     optimization_metrics = OptimizationMetrics(
