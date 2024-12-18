@@ -46,9 +46,13 @@ class EnhancedGCGConfig(nanogcg.GCGConfig):
         use_amp: bool = True,
         **kwargs
     ):
-        # Keep early_stop=True but pass our custom success_threshold
-        kwargs['early_stop'] = True
-        super().__init__(num_steps=num_steps, search_width=search_width, batch_size=batch_size, **kwargs)
+        super().__init__(
+            num_steps=num_steps, 
+            search_width=search_width, 
+            batch_size=batch_size, 
+            early_stop=False,  # Add this line
+            **kwargs
+        )
         self.success_threshold = success_threshold
         self.max_memory_usage = max_memory_usage
         self.use_flash_attention = use_flash_attention
