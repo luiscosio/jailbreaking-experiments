@@ -37,7 +37,7 @@ class EnhancedGCGConfig(nanogcg.GCGConfig):
     """Extended configuration for GCG optimization"""
     def __init__(
         self,
-        num_steps: int = 250,
+        num_steps: int = 1000,  # Increased default steps
         search_width: int = 512,
         batch_size: Optional[int] = None,
         success_threshold: float = 0.1,
@@ -46,6 +46,7 @@ class EnhancedGCGConfig(nanogcg.GCGConfig):
         use_amp: bool = True,
         **kwargs
     ):
+        kwargs['early_stop'] = False  # Disable built-in early stopping
         super().__init__(num_steps=num_steps, search_width=search_width, batch_size=batch_size, **kwargs)
         self.success_threshold = success_threshold
         self.max_memory_usage = max_memory_usage
@@ -88,7 +89,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target", type=str, required=True)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--dtype", type=str, default="bfloat16")
-    parser.add_argument("--num_steps", type=int, default=250)
+    parser.add_argument("--num_steps", type=int, default=1000)  # Increased default steps
     parser.add_argument("--search_width", type=int, default=512)
     parser.add_argument("--success_threshold", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
@@ -112,11 +113,17 @@ def run_optimized_gcg(
     final_metrics = monitor_gpu_metrics()
     end_time = time.time()
     
+    found_adversarial = result.best_loss < config.success_threshold
+    if found_adversarial:
+        logger.info(f"Successfully found adversarial example with loss: {result.best_loss}")
+    else:
+        logger.info(f"Completed optimization. Best loss: {result.best_loss}")
+    
     optimization_metrics = OptimizationMetrics(
         total_time=end_time - start_time,
         peak_memory=final_metrics.get('max_memory_allocated', 0),
         best_loss=result.best_loss,
-        found_adversarial=result.best_loss < config.success_threshold
+        found_adversarial=found_adversarial
     )
     
     return result, optimization_metrics
@@ -143,7 +150,6 @@ def main():
         search_width=args.search_width,
         success_threshold=args.success_threshold,
         seed=args.seed,
-        early_stop=True,
         batch_size=args.search_width  # Initialize batch size to search width
     )
     
@@ -168,9 +174,12 @@ def main():
     with torch.no_grad():
         output = model.generate(
             input_ids,
-            do_sample=False,
+            do_sample=True,  # Enable sampling
+            temperature=0.6,
+            top_p=0.9,
             max_new_tokens=512,
-            pad_token_id=tokenizer.pad_token_id
+            pad_token_id=tokenizer.eos_token_id,
+            attention_mask=torch.ones_like(input_ids)
         )
     
     print("\nFinal Results:")
