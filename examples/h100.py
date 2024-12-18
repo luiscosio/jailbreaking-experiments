@@ -46,6 +46,7 @@ class EnhancedGCGConfig(nanogcg.GCGConfig):
             search_width=search_width, 
             batch_size=batch_size,
             early_stop=True,
+            use_prefix_cache=False,  # Disable deprecated KV cache handling
             **kwargs
         )
         self.success_threshold = success_threshold
@@ -56,6 +57,11 @@ def setup_h100_optimizations(model: AutoModelForCausalLM) -> AutoModelForCausalL
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     
+    # Configure deterministic attention
+    if hasattr(model.config, "use_memory_efficient_attention"):
+        model.config.use_memory_efficient_attention = False
+    
+    # Configure flash attention if available
     if hasattr(model.config, 'use_flash_attention'):
         model.config.use_flash_attention = True
     
@@ -102,12 +108,14 @@ def main():
     args = parse_args()
     logger.info("Starting GCG optimization with enhanced configuration")
     
-    torch.use_deterministic_algorithms(True)
+    # Enable deterministic algorithms
+    torch.use_deterministic_algorithms(True, warn_only=False)
     
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         torch_dtype=getattr(torch, args.dtype),
         device_map="auto",
+        use_cache=False  # Disable KV cache to avoid deprecation warning
     )
     model = setup_h100_optimizations(model)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
