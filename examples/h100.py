@@ -1,15 +1,19 @@
 import argparse
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import torch
-import torch.cuda.amp as amp
+from torch import amp  # Updated import
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from nanogcg.gcg import GCGResult  # Updated import
+from nanogcg.gcg import GCGResult
 import nanogcg
 from tqdm import tqdm
+
+# Set CUDA deterministic behavior
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 # Configure logging
 logging.basicConfig(
@@ -39,8 +43,8 @@ class EnhancedGCGConfig(nanogcg.GCGConfig):
         num_steps: int = 250,
         search_width: int = 512,
         batch_size: Optional[int] = None,
-        success_threshold: float = 0.1,  # Loss threshold for successful adversarial example
-        max_memory_usage: float = 0.9,   # Maximum GPU memory usage (90%)
+        success_threshold: float = 0.1,
+        max_memory_usage: float = 0.9,
         use_flash_attention: bool = True,
         use_amp: bool = True,
         **kwargs
@@ -57,6 +61,10 @@ def setup_h100_optimizations(model: AutoModelForCausalLM) -> AutoModelForCausalL
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     
+    # Set deterministic behavior
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    
     # Enable flash attention if available
     if hasattr(model.config, 'use_flash_attention'):
         model.config.use_flash_attention = True
@@ -64,18 +72,14 @@ def setup_h100_optimizations(model: AutoModelForCausalLM) -> AutoModelForCausalL
     # Set optimal memory formats
     model = model.to(memory_format=torch.channels_last)
     
-    # Enable parallel processing
-    if torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model)
-    
     return model
 
 def monitor_gpu_metrics() -> dict:
     """Monitor GPU metrics during optimization"""
     if torch.cuda.is_available():
         return {
-            'memory_allocated': torch.cuda.memory_allocated() / 1024**3,  # GB
-            'memory_reserved': torch.cuda.memory_reserved() / 1024**3,    # GB
+            'memory_allocated': torch.cuda.memory_allocated() / 1024**3,
+            'memory_reserved': torch.cuda.memory_reserved() / 1024**3,
             'max_memory_allocated': torch.cuda.max_memory_allocated() / 1024**3,
             'device_utilization': torch.cuda.utilization()
         }
@@ -87,7 +91,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", type=str, required=True)
     parser.add_argument("--target", type=str, required=True)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--dtype", type=str, default="bfloat16")  # Better for H100
+    parser.add_argument("--dtype", type=str, default="bfloat16")
     parser.add_argument("--num_steps", type=int, default=250)
     parser.add_argument("--search_width", type=int, default=512)
     parser.add_argument("--success_threshold", type=float, default=0.1)
@@ -103,7 +107,9 @@ def run_optimized_gcg(
 ) -> Tuple[GCGResult, OptimizationMetrics]:
     """Run GCG with enhanced monitoring and optimization"""
     start_time = time.time()
-    scaler = amp.GradScaler() if config.use_amp else None
+    
+    # Updated GradScaler initialization
+    scaler = amp.GradScaler('cuda') if config.use_amp else None
     
     metrics = []
     found_adversarial = False
@@ -113,33 +119,28 @@ def run_optimized_gcg(
         for step in range(config.num_steps):
             step_start = time.time()
             
-            # Run GCG step with automatic mixed precision
-            with amp.autocast(enabled=config.use_amp):
+            # Updated autocast usage
+            with amp.autocast('cuda', enabled=config.use_amp):
                 result = nanogcg.run(model, tokenizer, messages, target, config)
             
-            # Monitor metrics
             current_metrics = monitor_gpu_metrics()
             metrics.append(current_metrics)
             
-            # Check for successful adversarial example
             if result.best_loss < config.success_threshold:
                 found_adversarial = True
                 logger.info(f"Found successful adversarial example at step {step}")
                 break
             
-            # Check memory usage
             if current_metrics.get('memory_allocated', 0) > config.max_memory_usage:
                 logger.warning("Memory usage exceeded threshold, reducing batch size")
                 config.batch_size = max(1, config.batch_size // 2)
             
-            # Update progress
             pbar.update(1)
             pbar.set_postfix({
                 'loss': f"{result.best_loss:.4f}",
                 'memory': f"{current_metrics.get('memory_allocated', 0):.2f}GB"
             })
     
-    # Calculate final metrics
     end_time = time.time()
     optimization_metrics = OptimizationMetrics(
         total_time=end_time - start_time,
@@ -156,31 +157,33 @@ def main():
     args = parse_args()
     logger.info("Starting GCG optimization with enhanced configuration")
     
-    # Set up model with H100 optimizations
+    # Set deterministic behavior
+    torch.use_deterministic_algorithms(True)
+    
+    # Load model
+    cache_dir = os.getenv('TRANSFORMERS_CACHE', os.path.expanduser('~/.cache/huggingface'))
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         torch_dtype=getattr(torch, args.dtype),
-        device_map="auto"
+        device_map="auto",
+        cache_dir=cache_dir
     )
     model = setup_h100_optimizations(model)
     
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    tokenizer = AutoTokenizer.from_pretrained(args.model, cache_dir=cache_dir)
     
-    # Configure enhanced GCG settings
     config = EnhancedGCGConfig(
         num_steps=args.num_steps,
         search_width=args.search_width,
         success_threshold=args.success_threshold,
         seed=args.seed,
-        early_stop=True,
+        early_stop=True
     )
     
     messages = [{"role": "user", "content": args.prompt}]
     
-    # Run optimization
     result, metrics = run_optimized_gcg(model, tokenizer, messages, args.target, config)
     
-    # Log results
     logger.info("\nOptimization Results:")
     logger.info(f"Total time: {metrics.total_time:.2f} seconds")
     logger.info(f"Peak memory usage: {metrics.peak_memory:.2f} GB")
@@ -188,7 +191,6 @@ def main():
     logger.info(f"Found adversarial example: {metrics.found_adversarial}")
     logger.info(f"Best loss achieved: {metrics.best_loss:.4f}")
     
-    # Generate final output
     messages[-1]["content"] = messages[-1]["content"] + " " + result.best_string
     input_ids = tokenizer.apply_chat_template(
         messages,
