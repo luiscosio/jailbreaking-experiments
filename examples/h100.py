@@ -173,8 +173,6 @@ def main():
         success_threshold=args.success_threshold,
         seed=args.seed,
         early_stop=True,
-        use_mellowmax=True,
-        mellowmax_alpha=1.0
     )
     
     messages = [{"role": "user", "content": args.prompt}]
